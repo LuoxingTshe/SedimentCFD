@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sedimentcfd"
-version = "0.1.0"
-description = "Minimal planar FEM flow and conservative suspended sediment prototype"
+version = "0.2.0"
+description = "Qualitative 2D gabion / suspended-sediment preview on Thetis"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "scipy>=1.10"]
+dependencies = ["numpy>=1.24"]  # plus Firedrake + Thetis for `run`: see scripts/install_thetis.py
 
 [project.scripts]
 sedimentcfd = "sedimentcfd.__main__:main"
 
-[tool.setuptools.package-data]
-sedimentcfd = ["web/*.html"]
-
 [tool.setuptools]
 packages = ["sedimentcfd"]
+
+[tool.setuptools.package-data]
+sedimentcfd = ["web/*.html"]

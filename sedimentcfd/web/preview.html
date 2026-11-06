@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SedimentCFD · 石笼绕流预览</title>
+<style>
+  * { box-sizing: border-box }
+  body { margin: 0; background: #000; color: #e8ede9; font: 15px system-ui, sans-serif }
+  main { max-width: 1300px; margin: auto; padding: 32px }
+  header { display: flex; justify-content: space-between; align-items: center }
+  small, .muted { color: #a5b6b8 }
+  h1 { font-size: 32px; margin: 8px 0 }
+  h2 { font-size: 18px }
+  p { line-height: 1.7 }
+  a { color: #9fddc7 }
+  .tag { border: 1px solid #537574; color: #9fddc7; padding: 8px 12px; border-radius: 20px }
+  .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 24px 0 }
+  button, select { background: #111; border: 1px solid #444; border-radius: 6px; color: #fff; padding: 10px; cursor: pointer }
+  input[type=number] { width: 75px; background: #111; color: #fff; border: 1px solid #444; border-radius: 4px; padding: 4px }
+  input[type=range] { flex: 1; min-width: 120px; accent-color: #94d6c0 }
+  .panel { border: 1px solid #333; border-radius: 12px; padding: 20px; margin: 16px 0 }
+  .flowmap { position: relative }
+  .flowmap #particles { position: absolute; inset: 0; pointer-events: none; background: transparent }
+  canvas { display: block; width: 100%; height: auto; background: #000 }
+  #legend { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-variant-numeric: tabular-nums }
+  #legend .bar { width: 65%; height: 14px; border: 1px solid #333 }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px }
+  .stats strong { display: block; font-size: 24px; margin-top: 8px }
+  table { width: 100%; border-collapse: collapse }
+  td { padding: 9px; border-bottom: 1px solid #333 }
+  td:first-child { color: #a5b6b8 }
+  @media (max-width: 700px) {
+    main { padding: 16px }
+    header { display: block }
+    .tag { display: inline-block }
+    h1 { font-size: 26px }
+    .stats { grid-template-columns: 1fr 1fr }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <small>ROCKLIZATION LAB / SEDIMENTCFD</small>
+      <h1>石笼绕流 · 粒子动画</h1>
+      <small>Thetis / Firedrake · P1DG 浅水方程 + 守恒型悬沙 + Exner 床面</small>
+    </div>
+    <span class="tag">真实求解数据 · 未经实测标定 · 仅作定性参考</span>
+  </header>
+  <p id="quality" class="muted"></p>
+
+  <div class="toolbar">
+    <select id="field">
+      <option value="speed">流速 m/s</option>
+      <option value="bed" selected>床面变化 mm</option>
+      <option value="concentration">含沙量 kg/m³</option>
+      <option value="depth">水深 m</option>
+    </select>
+    <button id="play">播放时间序列</button>
+    <input id="time" type="range" min="0" step="any" value="0">
+    <span id="clock"></span>
+    <label><input type="checkbox" id="arrows"> 流向箭头</label>
+    <button id="particlesPlay">暂停粒子</button>
+    <select id="particleSpeed">
+      <option value="1">粒子 1×</option>
+      <option value="3" selected>粒子 3×</option>
+      <option value="6">粒子 6×</option>
+    </select>
+  </div>
+
+  <div class="panel">
+    <div class="flowmap">
+      <canvas id="map" width="1200" height="660"></canvas>
+      <canvas id="particles" width="1200" height="660"></canvas>
+    </div>
+    <div id="legend"></div>
+    <p class="muted" style="margin-bottom:0">
+      来流 →　白色虚线框：石笼阻力区域　/　床面：橙色淤积 · 黑色零变化 · 蓝色冲刷。
+      亮点与拖尾是由计算速度场驱动的示踪粒子，不是逐颗泥沙，不计沉降；淤积由底图表示。
+      流场在保存帧之间线性插值连续回放，拖动时间轴可切换时刻。
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>障碍物布局</h2>
+    <p>编辑矩形石笼的中心、尺寸、角度（度，逆时针）和阻力倍数。坐标原点位于左下角。提交后重新运行 Thetis（需通过 <code>python -m sedimentcfd serve</code> 打开本页）。</p>
+    <div id="obstacles"></div>
+    <button id="addObstacle">添加石笼</button>
+    <p>边界：左侧全宽均匀来流（固定流量 = 来流流速 × 水深 × 河宽，携带入流含沙量），右侧出口水位固定为 0 m，两岸不透水。</p>
+    <button id="solve">应用布局并重新计算</button>
+    <p id="jobStatus"></p>
+  </div>
+
+  <div class="stats">
+    <div class="panel">最小水深<strong id="minDepth"></strong></div>
+    <div class="panel">最大淤积<strong id="maxDeposit"></strong></div>
+    <div class="panel">最大冲刷<strong id="maxErosion"></strong></div>
+    <div class="panel">悬沙质量<strong id="suspended"></strong></div>
+  </div>
+
+  <div class="panel">
+    <h2>参数与解释</h2>
+    <table id="params"></table>
+    <p id="notes" class="muted"></p>
+    <p><a href="preview_data.json" download>下载计算数据 JSON</a> · <a href="https://thetisproject.org/sediment_formulation_2d.html">Thetis 泥沙方程说明</a></p>
+  </div>
+</main>
+
+<script>
+const D = __RESULT_JSON__;
+const C = D.config;
+const frames = D.frames;
+const $ = id => document.getElementById(id);
+
+// ---------- geometry: model metres -> canvas pixels ----------
+const W = 1200, H = 660;
+const PLOT = { left: 50, top: 60, width: 1100, height: 550 };
+const toPx = (x, y) => [PLOT.left + x / C.length * PLOT.width, PLOT.top + PLOT.height - y / C.width * PLOT.height];
+
+// ---------- colour scales ----------
+for (const f of frames) f.speed = f.uv.map(v => Math.hypot(v[0], v[1]));
+const FIELDS = ['speed', 'bed', 'concentration', 'depth'];
+const ranges = {};
+for (const key of FIELDS) {
+  let lo = Infinity, hi = -Infinity;
+  for (const f of frames) for (const v of f[key]) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (key === 'bed') { lo = Math.min(lo, -1e-9); hi = Math.max(hi, 1e-9); }  // keep 0 inside the range
+  ranges[key] = [lo, Math.max(hi, lo + 1e-9)];
+}
+const BLACK = [0, 0, 0], ORANGE = [255, 140, 0], BLUE = [40, 120, 255], GREEN = [170, 235, 172];
+const mix = (a, b, t) => a.map((x, i) => Math.round(x + (b[i] - x) * Math.max(0, Math.min(1, t))));
+
+function color(v, key) {
+  const [lo, hi] = ranges[key];
+  let rgb;
+  if (key === 'bed') rgb = v >= 0 ? mix(BLACK, ORANGE, v / hi) : mix(BLACK, BLUE, v / lo);  // deposition / erosion scaled separately
+  else rgb = mix(BLACK, GREEN, (v - lo) / (hi - lo));
+  return `rgb(${rgb})`;
+}
+
+function drawLegend() {
+  const key = $('field').value, [lo, hi] = ranges[key];
+  const gradient = key === 'bed'
+    ? `${color(lo, key)} 0%, #000 ${(100 * -lo / (hi - lo)).toFixed(1)}%, ${color(hi, key)} 100%`
+    : `${color(lo, key)}, ${color(hi, key)}`;
+  $('legend').innerHTML = `<span>${lo.toPrecision(4)}</span>`
+    + `<span class="bar" style="background:linear-gradient(90deg, ${gradient})"></span>`
+    + `<span>${hi.toPrecision(4)}</span>`;
+}
+
+// ---------- continuous playback ----------
+// tFrame is a fractional frame index; fields are linearly interpolated between saved frames.
+const FRAMES_PER_SECOND = 1 / 0.22;
+let tFrame = 0, playing = false, cached = null;
+const lerp = (a, b, w) => a + (b - a) * w;
+const lerpArray = (a, b, w) => a.map((x, i) => x + (b[i] - x) * w);
+
+function current() {
+  if (cached && cached.t === tFrame) return cached;
+  const i0 = Math.min(Math.floor(tFrame), frames.length - 1), i1 = Math.min(i0 + 1, frames.length - 1);
+  const w = tFrame - i0, a = frames[i0], b = frames[i1];
+  cached = {
+    t: tFrame,
+    time: lerp(a.time, b.time, w),
+    uv: a.uv.map((v, i) => [lerp(v[0], b.uv[i][0], w), lerp(v[1], b.uv[i][1], w)]),
+    speed: lerpArray(a.speed, b.speed, w),
+    bed: lerpArray(a.bed, b.bed, w),
+    concentration: lerpArray(a.concentration, b.concentration, w),
+    depth: lerpArray(a.depth, b.depth, w),
+    suspended_kg: lerp(D.inventory[i0].suspended_kg, D.inventory[i1].suspended_kg, w),
+  };
+  return cached;
+}
+
+// ---------- map ----------
+const ctx = $('map').getContext('2d');
+
+function path(context, points) {
+  context.beginPath();
+  points.forEach((p, n) => n ? context.lineTo(...p) : context.moveTo(...p));
+  context.closePath();
+}
+
+function gabionCorners(g) {
+  const a = g.angle * Math.PI / 180;
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => {
+    const u = sx * g.length / 2, v = sy * g.width / 2;
+    return toPx(g.x + u * Math.cos(a) - v * Math.sin(a), g.y + u * Math.sin(a) + v * Math.cos(a));
+  });
+}
+
+function drawArrows(uv) {
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.3;
+  const used = new Set();  // at most one arrow per 1 m × 1 m bin
+  D.triangles.forEach((tri, i) => {
+    const x = tri.reduce((s, j) => s + D.points[j][0], 0) / 3;
+    const y = tri.reduce((s, j) => s + D.points[j][1], 0) / 3;
+    const bin = `${Math.floor(x)}:${Math.floor(y)}`;
+    if (used.has(bin)) return;
+    used.add(bin);
+    const [px, py] = toPx(x, y), dx = uv[i][0] * 65, dy = -uv[i][1] * 65, a = Math.atan2(dy, dx);
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + dx, py + dy);
+    ctx.lineTo(px + dx - 4 * Math.cos(a - .5), py + dy - 4 * Math.sin(a - .5));
+    ctx.moveTo(px + dx, py + dy);
+    ctx.lineTo(px + dx - 4 * Math.cos(a + .5), py + dy - 4 * Math.sin(a + .5));
+    ctx.stroke();
+  });
+}
+
+function draw() {
+  const f = current(), key = $('field').value, values = f[key];
+  ctx.clearRect(0, 0, W, H);
+  D.triangles.forEach((tri, i) => {
+    path(ctx, tri.map(j => toPx(...D.points[j])));
+    ctx.fillStyle = color(values[i], key);
+    ctx.fill();
+  });
+
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([7, 5]);
+  for (const g of C.gabions) { path(ctx, gabionCorners(g)); ctx.stroke(); }
+  ctx.setLineDash([]);
+  if ($('arrows').checked) drawArrows(f.uv);
+
+  ctx.fillStyle = '#b5c9cc';
+  ctx.font = '16px system-ui';
+  for (let x = 0; x <= C.length; x += 2) ctx.fillText(`${x} m`, toPx(x, 0)[0] - 10, 640);
+  for (let y = 0; y <= C.width; y += 2) ctx.fillText(y, 15, toPx(0, y)[1] + 5);
+
+  $('clock').textContent = `${f.time.toFixed(1)} / ${C.duration} s`;
+  $('minDepth').textContent = Math.min(...f.depth).toFixed(3) + ' m';
+  $('maxDeposit').textContent = Math.max(0, ...f.bed).toFixed(3) + ' mm';
+  $('maxErosion').textContent = Math.max(0, ...f.bed.map(x => -x)).toFixed(3) + ' mm';
+  $('suspended').textContent = f.suspended_kg.toFixed(3) + ' kg';
+}
+
+function setPlaying(on) {
+  playing = on;
+  $('play').textContent = on ? '暂停' : '播放时间序列';
+  if (on && tFrame >= frames.length - 1) tFrame = 0;
+}
+
+// ---------- tracer particles ----------
+// Triangles are found geometrically (0.5 m bins + barycentric test), not from vertex ordering.
+const pc = $('particles').getContext('2d');
+const BIN = 0.5, bins = new Map();
+D.triangles.forEach((tri, i) => {
+  const xs = tri.map(j => D.points[j][0]), ys = tri.map(j => D.points[j][1]);
+  for (let bx = Math.floor(Math.min(...xs) / BIN); bx <= Math.floor(Math.max(...xs) / BIN); bx++)
+    for (let by = Math.floor(Math.min(...ys) / BIN); by <= Math.floor(Math.max(...ys) / BIN); by++) {
+      const k = bx + ',' + by;
+      if (!bins.has(k)) bins.set(k, []);
+      bins.get(k).push(i);
+    }
+});
+
+function locate(x, y) {
+  if (x < 0 || y < 0 || x > C.length || y > C.width) return -1;
+  for (const i of bins.get(Math.floor(x / BIN) + ',' + Math.floor(y / BIN)) || []) {
+    const [a, b, c] = D.triangles[i].map(j => D.points[j]);
+    const den = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+    const u = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (y - c[1])) / den;
+    const v = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (y - c[1])) / den;
+    if (u >= -1e-8 && v >= -1e-8 && u + v <= 1 + 1e-8) return i;
+  }
+  return -1;
+}
+
+const PARTICLES = 1400, MAX_AGE = 75;
+let particles = [], particlesRunning = true, lastNow = 0;
+const spawn = (anywhere = false) => ({
+  x: anywhere ? Math.random() * C.length : Math.random() * .15,  // new tracers enter at the inflow
+  y: .01 + Math.random() * (C.width - .02),
+  age: Math.random() * 30,
+});
+
+function advance(p, dt, uv) {  // midpoint (RK2) step
+  const i = locate(p.x, p.y);
+  if (i < 0) return false;
+  let v = uv[i];
+  const j = locate(p.x + .5 * dt * v[0], p.y + .5 * dt * v[1]);
+  if (j >= 0) v = uv[j];
+  p.x += dt * v[0];
+  p.y += dt * v[1];
+  p.age += dt;
+  return p.x >= 0 && p.x <= C.length && p.y >= 0 && p.y <= C.width && p.age < MAX_AGE;
+}
+
+function drawParticles(dt) {
+  pc.globalCompositeOperation = 'destination-out';  // fade old trails
+  pc.fillStyle = 'rgba(0,0,0,0.07)';
+  pc.fillRect(0, 0, W, H);
+  pc.globalCompositeOperation = 'source-over';
+  pc.save();
+  pc.beginPath();
+  pc.rect(PLOT.left, PLOT.top, PLOT.width, PLOT.height);
+  pc.clip();
+  pc.strokeStyle = 'rgba(195,244,255,.72)';
+  pc.fillStyle = 'rgba(240,255,255,.95)';
+  pc.lineWidth = 1.25;
+  const uv = current().uv;
+  particles.forEach((p, k) => {
+    const from = toPx(p.x, p.y);
+    if (!advance(p, dt, uv)) { particles[k] = spawn(); return; }
+    const to = toPx(p.x, p.y);
+    pc.beginPath();
+    pc.moveTo(...from);
+    pc.lineTo(...to);
+    pc.stroke();
+    pc.fillRect(to[0] - .75, to[1] - .75, 1.5, 1.5);
+  });
+  pc.restore();
+}
+
+function animate(now) {
+  const real = Math.min((now - lastNow) / 1000 || 0, .04);
+  lastNow = now;
+  if (playing && real > 0) {
+    tFrame += real * FRAMES_PER_SECOND;
+    if (tFrame > frames.length - 1) tFrame %= frames.length - 1;
+    $('time').value = tFrame;
+    draw();
+  }
+  const dt = real * Number($('particleSpeed').value);
+  if (particlesRunning && dt > 0) drawParticles(dt);
+  requestAnimationFrame(animate);
+}
+
+// ---------- obstacle editor + re-solve ----------
+const layout = structuredClone(C.gabions);
+const GABION_FIELDS = ['x', 'y', 'length', 'width', 'angle', 'resistance'];
+
+function showObstacles() {
+  $('obstacles').replaceChildren();
+  layout.forEach((g, index) => {
+    const row = document.createElement('p');
+    for (const key of GABION_FIELDS) {
+      const label = document.createElement('label');
+      label.textContent = key + ' ';
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = '0.1';
+      input.value = g[key];
+      input.onchange = () => { g[key] = Number(input.value); };
+      label.append(input, ' ');
+      row.append(label);
+    }
+    const remove = document.createElement('button');
+    remove.textContent = '删除';
+    remove.onclick = () => { layout.splice(index, 1); showObstacles(); };
+    row.append(remove);
+    $('obstacles').append(row);
+  });
+}
+
+async function solve() {
+  const fail = message => { $('jobStatus').textContent = message; $('solve').disabled = false; };
+  $('solve').disabled = true;
+  $('jobStatus').textContent = `正在运行：${C.spinup} s 水动力预热 + ${C.duration} s 泥沙耦合计算…`;
+  try {
+    const response = await fetch('/api/solve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: { ...C, gabions: layout } }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error);
+  } catch (error) {
+    return fail('提交失败（需通过 python -m sedimentcfd serve 打开本页）：' + error.message);
+  }
+  const poll = setInterval(async () => {
+    try {
+      const job = await (await fetch('/api/job')).json();
+      if (job.state === 'done') { clearInterval(poll); location.href = job.url; }
+      if (job.state === 'failed') { clearInterval(poll); fail(job.error); }
+    } catch (error) { clearInterval(poll); fail(error.message); }
+  }, 2000);
+}
+
+// ---------- text ----------
+function describe() {
+  const n = D.numerics, k = D.closure;
+  $('quality').textContent = `数值检查：最小单元平均含沙量 ${n.min_concentration.toExponential(3)} kg/m³，`
+    + (n.min_concentration < 0 ? '存在微小负值（在峰值 0.1% 容差内），按原值显示。' : '各帧单元平均含沙量非负。');
+  const drags = C.gabions.map(g => (C.drag * (g.resistance - 1)).toFixed(2)).join(' / ');
+  const rows = [
+    ['河段 / 初始水深 / 来流流速', `${C.length} × ${C.width} m / ${C.depth} m / ${C.velocity} m/s`],
+    ['粒径 / 密度 / 孔隙率', `${+(C.grain_size * 1000).toFixed(4)} mm / ${C.sediment_density} kg/m³ / ${C.bed_porosity}`],
+    ['入流 / 初始含沙量', `${C.inlet_concentration} / ${C.initial_concentration} kg/m³（高含沙水体，场景假设）`],
+    ['沉降速度 / 临界剪应力', `${k.settling_velocity.toFixed(5)} m/s / ${k.taucr.toFixed(4)} Pa（粒径闭合）`],
+    ['石笼额外线性阻力', C.gabions.length ? `${drags} s⁻¹（待标定）` : '无石笼'],
+    ['水平黏性 / 泥沙扩散', `${C.viscosity} / ${C.diffusivity} m²/s（待标定）`],
+    ['网格 / 时间步', `${C.nx} × ${C.ny} × 2 = ${D.triangles.length} 个三角形 / ${C.timestep} s`],
+  ];
+  $('params').innerHTML = rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('');
+  $('notes').textContent = `先进行 ${C.spinup} s 水动力预热，再计算 ${C.duration} s 泥沙与床面耦合；时间轴从耦合开始计时。`
+    + `网格约 ${+(C.length / C.nx).toFixed(3)} × ${+(C.width / C.ny).toFixed(3)} m，图中显示 DG0 单元平均，不做视觉平滑。`
+    + '全域床面可冲刷，未加入石笼基础防冲、有限可蚀层和推移质；石笼只是阻力区，不解析石缝。'
+    + '悬沙质量与床面变化库存不是完整的边界通量质量预算。结果未经实测标定，只用于比较布局的相对规律，不能预测真实淤积厚度。';
+}
+
+// ---------- wire up ----------
+$('time').max = frames.length - 1;
+$('time').oninput = () => { tFrame = +$('time').value; draw(); };
+$('field').onchange = () => { drawLegend(); draw(); };
+$('arrows').onchange = draw;
+$('play').onclick = () => setPlaying(!playing);
+$('particlesPlay').onclick = () => {
+  particlesRunning = !particlesRunning;
+  $('particlesPlay').textContent = particlesRunning ? '暂停粒子' : '继续粒子';
+};
+$('addObstacle').onclick = () => {
+  layout.push({ x: C.length / 2, y: C.width / 2, length: 3, width: 1.5, angle: 60, resistance: 10 });
+  showObstacles();
+};
+$('solve').onclick = solve;
+
+describe();
+showObstacles();
+drawLegend();
+draw();
+particles = Array.from({ length: PARTICLES }, () => spawn(true));
+setPlaying(true);
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

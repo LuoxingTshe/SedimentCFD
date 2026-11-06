@@ -1,57 +1,76 @@
-"""Exercise the actual HTTP handlers without opening a listening socket."""
-import io
+from http.server import ThreadingHTTPServer
+import http.client
 import json
+import tempfile
+import threading
 import unittest
-from sedimentcfd.server import Handler
+from pathlib import Path
+from unittest import mock
+
+from sedimentcfd import Config, server
 
 
-class MemorySocket:
-    def __init__(self, request):
-        self.request = request
-        self.output = bytearray()
-    def makefile(self, *args, **kwargs):
-        return io.BytesIO(self.request)
-    def sendall(self, data):
-        self.output.extend(data)
+class ServerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        patches = [mock.patch.object(server, 'OUTPUT', Path(self.tmp.name)),
+                   mock.patch.object(server, 'run_job', self.fake_run_job),
+                   mock.patch.dict(server.job, {'state': 'idle'}, clear=True)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.started = []
+        self.httpd = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+        self.host = f'127.0.0.1:{self.httpd.server_port}'
 
+    def fake_run_job(self, config, directory):
+        self.started.append((config, directory))
 
-class QuietHandler(Handler):
-    def log_message(self, *args):
-        pass
-
-
-class HTTPTests(unittest.TestCase):
-    def request(self, method, path, body=None, origin=None):
-        payload = json.dumps(body).encode() if body is not None else b''
-        headers = f'{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:8765\r\nContent-Length: {len(payload)}\r\n'
+    def request(self, method, path, body=None, origin=True):
+        conn = http.client.HTTPConnection(self.host, timeout=5)
+        headers = {'Content-Type': 'application/json'}
         if origin:
-            headers += f'Origin: {origin}\r\n'
-        socket = MemorySocket(headers.encode()+b'\r\n'+payload)
-        QuietHandler(socket, ('127.0.0.1', 10000), None)
-        raw_headers, content = bytes(socket.output).split(b'\r\n\r\n', 1)
-        return int(raw_headers.split()[1]), content
+            headers['Origin'] = 'http://' + self.host
+        conn.request(method, path, body=None if body is None else json.dumps(body), headers=headers)
+        response = conn.getresponse()
+        data = response.read()
+        conn.close()
+        return response.status, data
 
-    def test_page_and_default_config(self):
-        status, content = self.request('GET', '/')
-        self.assertEqual(status, 200)
-        self.assertIn(b'<canvas', content)
-        status, content = self.request('GET', '/api/config')
-        self.assertEqual(status, 200)
-        self.assertEqual(len(json.loads(content)['gabions']), 2)
+    def test_job_state(self):
+        status, data = self.request('GET', '/api/job')
+        self.assertEqual((status, json.loads(data)), (200, {'state': 'idle'}))
 
-    def test_simulation_and_validation(self):
-        status, content = self.request('POST', '/api/simulate', {'nx':8,'ny':4,'duration':10,'dt':2,'gabions':[]})
-        self.assertEqual(status, 200)
-        self.assertEqual(json.loads(content)['summary']['steps'], 5)
-        status, content = self.request('POST', '/api/simulate', {'depth':-1})
+    def test_solve_starts_one_job(self):
+        body = {'config': Config(nx=8, ny=4).to_dict()}
+        status, _ = self.request('POST', '/api/solve', body)
+        self.assertEqual(status, 202)
+        self.assertEqual(server.job['state'], 'running')
+        self.assertEqual(self.started[0][0].nx, 8)
+        status, _ = self.request('POST', '/api/solve', body)
+        self.assertEqual(status, 409)
+
+    def test_rejects_cross_origin(self):
+        status, _ = self.request('POST', '/api/solve', {'config': {}}, origin=False)
+        self.assertEqual(status, 403)
+
+    def test_rejects_invalid_or_oversized_config(self):
+        for config in ({'velocity': -1}, {'nx': 200}, {'duration': 1000}):
+            with self.subTest(config=config):
+                status, _ = self.request('POST', '/api/solve', {'config': config})
+                self.assertEqual(status, 400)
+        status, _ = self.request('POST', '/api/solve', {'no_config': 1})
         self.assertEqual(status, 400)
-        self.assertIn('depth', json.loads(content)['error'])
+        self.assertEqual(self.started, [])
 
-    def test_unknown_route(self):
-        self.assertEqual(self.request('GET', '/missing')[0], 404)
-
-    def test_external_origin_rejected(self):
-        self.assertEqual(self.request('POST', '/api/simulate', {}, 'https://example.com')[0], 403)
+    def test_serves_output_files(self):
+        Path(self.tmp.name, 'index.html').write_text('<p>ok</p>')
+        status, data = self.request('GET', '/index.html')
+        self.assertEqual((status, data), (200, b'<p>ok</p>'))
 
 
 if __name__ == '__main__':

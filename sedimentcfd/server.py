@@ -1,64 +1,91 @@
-"""Loopback-only UI; no external network dependencies."""
-from dataclasses import asdict
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+"""Local preview server: serves outputs and runs one solver job at a time.
+
+GET  /api/job    current job state
+POST /api/solve  {"config": {...}} -> runs `python -m sedimentcfd run` in outputs/preview/jobs/<id>/
+"""
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
-from threading import BoundedSemaphore
-from .engine import Config, simulate
+import subprocess
+import sys
+import threading
+import uuid
 
-_gate = BoundedSemaphore(1)
+from .config import Config
+
+ROOT = Path(__file__).resolve().parents[1]
+OUTPUT = ROOT / 'outputs' / 'preview'
+LIMITS = dict(nx=64, ny=32, duration=120.0)  # keep interactive jobs to minutes
+
+lock = threading.Lock()
+job = {'state': 'idle'}
 
 
-class Handler(BaseHTTPRequestHandler):
-    def respond(self, status, body, mime='application/json; charset=utf-8'):
-        if not isinstance(body, bytes):
-            body = json.dumps(body, ensure_ascii=False, allow_nan=False).encode()
+def run_job(config, directory):
+    try:
+        directory.mkdir(parents=True)
+        (directory / 'config.json').write_text(json.dumps(config.to_dict(), indent=2))
+        with (directory / 'solver.log').open('w') as log:
+            result = subprocess.run(
+                [sys.executable, '-m', 'sedimentcfd', 'run',
+                 '--config', str(directory / 'config.json'), '--output', str(directory)],
+                cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        ok = result.returncode == 0
+        error = '' if ok else (directory / 'solver.log').read_text()[-2000:]
+        with lock:
+            job.update(state='done' if ok else 'failed', url=f'/jobs/{directory.name}/index.html', error=error)
+    except Exception as error:
+        with lock:
+            job.update(state='failed', error=str(error))
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(OUTPUT), **kwargs)
+
+    def reply(self, status, data):
+        body = json.dumps(data).encode()
         self.send_response(status)
-        self.send_header('Content-Type', mime)
+        self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('X-Content-Type-Options', 'nosniff')
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == '/':
-            self.respond(200, (Path(__file__).parent / 'web' / 'index.html').read_bytes(), 'text/html; charset=utf-8')
-        elif self.path == '/api/config':
-            self.respond(200, asdict(Config()))
-        else:
-            self.respond(404, {'error': 'Not found'})
+        if self.path == '/api/job':
+            with lock:
+                return self.reply(200, dict(job))
+        super().do_GET()
 
     def do_POST(self):
-        if self.path != '/api/simulate':
-            self.respond(404, {'error': 'Not found'})
-            return
-        if self.headers.get('Origin') and self.headers['Origin'] != f"http://{self.headers.get('Host')}":
-            self.respond(403, {'error': 'Only same-origin requests allowed'})
-            return
-        if not _gate.acquire(blocking=False):
-            self.respond(429, {'error': '求解器正在运行，请稍后重试'})
-            return
+        if self.path != '/api/solve':
+            return self.reply(404, {'error': 'unknown endpoint'})
+        if self.headers.get('Origin') != 'http://' + self.headers.get('Host', ''):
+            return self.reply(403, {'error': 'same-origin requests only'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= 100000:
-                raise ValueError('配置大小须在 1–100000 字节之间')
-            config = Config.from_dict(json.loads(self.rfile.read(size)))
-            self.respond(200, simulate(config))
-        except (ValueError, TypeError, OverflowError) as e:
-            self.respond(400, {'error': str(e)})
-        except Exception as e:
-            self.log_error('Solver failure: %r', e)
-            self.respond(500, {'error': '求解失败，请检查终端日志及参数尺度'})
-        finally:
-            _gate.release()
+            if not 0 < size < 100_000:
+                raise ValueError('invalid request size')
+            config = Config.from_dict(json.loads(self.rfile.read(size))['config'])
+            if config.nx > LIMITS['nx'] or config.ny > LIMITS['ny'] or config.duration > LIMITS['duration']:
+                raise ValueError('preview limit: {nx}×{ny} cells, {duration:g} s'.format(**LIMITS))
+        except (ValueError, KeyError, TypeError) as error:
+            return self.reply(400, {'error': str(error)})
+        with lock:
+            if job['state'] == 'running':
+                return self.reply(409, {'error': 'a solver job is already running'})
+            job.clear()
+            job['state'] = 'running'
+        directory = OUTPUT / 'jobs' / uuid.uuid4().hex
+        threading.Thread(target=run_job, args=(config, directory), daemon=True).start()
+        self.reply(202, {'state': 'running'})
 
 
-def serve(port=8765):
+def serve(port=8767):
+    OUTPUT.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
-    print(f'SedimentCFD: http://127.0.0.1:{port}', flush=True)
+    print(f'http://127.0.0.1:{port}/', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
-    finally:
-        server.server_close()
