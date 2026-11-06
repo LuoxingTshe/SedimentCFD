@@ -1,0 +1,36 @@
+{
+  "length": 40.0,
+  "width": 16.0,
+  "nx": 80,
+  "ny": 32,
+  "depth": 1.0,
+  "velocity": 0.45,
+  "drag": 0.03,
+  "diffusion": 0.02,
+  "inlet_concentration": 0.15,
+  "initial_concentration": 0.0,
+  "settling_velocity": 0.003,
+  "critical_velocity": 0.3,
+  "sediment_density": 2650.0,
+  "bed_porosity": 0.4,
+  "duration": 600.0,
+  "dt": 5.0,
+  "gabions": [
+    {
+      "x": 12.0,
+      "y": 4.0,
+      "length": 6.0,
+      "width": 1.2,
+      "angle": 65.0,
+      "resistance": 30.0
+    },
+    {
+      "x": 24,
+      "y": 11,
+      "length": 6,
+      "width": 1.2,
+      "angle": 115,
+      "resistance": 30
+    }
+  ]
+}

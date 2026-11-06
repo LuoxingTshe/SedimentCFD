@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+outputs/
+dist/
+external/
+.venv-*/
+.setup/
+activate_thetis.sh
+.DS_Store
