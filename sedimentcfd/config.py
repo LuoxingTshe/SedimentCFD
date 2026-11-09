@@ -24,9 +24,12 @@ def _default_gabions():
 
 @dataclass
 class Config:
-    # Domain and mesh (rectangle, left inflow, right outlet, impermeable banks)
+    # Domain and mesh (rectangle, inflow on one end, outlet on the other, impermeable banks)
     length: float = 16.0
     width: float = 8.0
+    origin_x: float = 0.0  # lower-left corner, so that CAD coordinates can be kept
+    origin_y: float = 0.0
+    inflow: str = 'left'  # side where the water enters: 'left' (flow +x) or 'right' (flow -x)
     nx: int = 32  # cells along x
     ny: int = 16  # cells along y
     # Flow
@@ -82,7 +85,7 @@ class Config:
 
     def validate(self):
         for name, value in asdict(self).items():
-            if name == 'gabions':
+            if name in ('gabions', 'inflow'):
                 continue
             if not _is_number(value):
                 raise ValueError(f'{name} must be a finite number')
@@ -98,6 +101,8 @@ class Config:
             n = getattr(self, name)
             if type(n) is not int or not 2 <= n <= 240:
                 raise ValueError(f'{name} must be an integer in 2..240')
+        if self.inflow not in ('left', 'right'):
+            raise ValueError("inflow must be 'left' or 'right'")
         if not 0 <= self.bed_porosity < 1:
             raise ValueError('bed_porosity must be in [0, 1)')
         if self.sediment_density <= WATER_DENSITY:
@@ -113,7 +118,7 @@ class Config:
                 raise ValueError(f'gabion {i}: all values must be finite numbers')
             if g.length <= 0 or g.width <= 0 or not 1 <= g.resistance <= 1e6:
                 raise ValueError(f'gabion {i}: size must be > 0 and resistance in 1..1e6')
-            if not (0 <= g.x <= self.length and 0 <= g.y <= self.width):
+            if not (0 <= g.x - self.origin_x <= self.length and 0 <= g.y - self.origin_y <= self.width):
                 raise ValueError(f'gabion {i}: centre must lie inside the domain')
 
 

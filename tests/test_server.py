@@ -59,7 +59,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 403)
 
     def test_rejects_invalid_or_oversized_config(self):
-        for config in ({'velocity': -1}, {'nx': 200}, {'duration': 1000}):
+        for config in ({'velocity': -1}, {'nx': 200, 'ny': 100}, {'duration': 1000}):
             with self.subTest(config=config):
                 status, _ = self.request('POST', '/api/solve', {'config': config})
                 self.assertEqual(status, 400)

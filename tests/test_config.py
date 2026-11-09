@@ -36,6 +36,8 @@ class ConfigTests(unittest.TestCase):
             {'gabions': [{'x': 1, 'y': 1, 'length': 1, 'width': 1, 'resistance': 0.5}]},
             {'gabions': [{'x': 1, 'y': 1}]},
             {'gabions': 'none'},
+            {'inflow': 'top'},
+            {'origin_x': 10, 'gabions': [{'x': 5, 'y': 1, 'length': 1, 'width': 1}]},  # left of the shifted domain
             [],
         ]
         for data in bad:

@@ -67,6 +67,7 @@
       <option value="1">粒子 1×</option>
       <option value="3" selected>粒子 3×</option>
       <option value="6">粒子 6×</option>
+      <option value="20">粒子 20×</option>
     </select>
   </div>
 
@@ -77,7 +78,7 @@
     </div>
     <div id="legend"></div>
     <p class="muted" style="margin-bottom:0">
-      来流 →　白色虚线框：石笼阻力区域　/　床面：橙色淤积 · 黑色零变化 · 蓝色冲刷。
+      <span id="flowArrow">来流 →</span>　白色虚线框：石笼阻力区域　/　床面：橙色淤积 · 黑色零变化 · 蓝色冲刷。
       亮点与拖尾是由计算速度场驱动的示踪粒子，不是逐颗泥沙，不计沉降；淤积由底图表示。
       流场在保存帧之间线性插值连续回放，拖动时间轴可切换时刻。
     </p>
@@ -85,10 +86,10 @@
 
   <div class="panel">
     <h2>障碍物布局</h2>
-    <p>编辑矩形石笼的中心、尺寸、角度（度，逆时针）和阻力倍数。坐标原点位于左下角。提交后重新运行 Thetis（需通过 <code>python -m sedimentcfd serve</code> 打开本页）。</p>
+    <p>编辑矩形石笼的中心、尺寸、角度（度，逆时针）和阻力倍数。坐标与配置一致（单位 m，<span id="originNote">原点位于左下角</span>）。提交后重新运行 Thetis（需通过 <code>python -m sedimentcfd serve</code> 打开本页）。</p>
     <div id="obstacles"></div>
     <button id="addObstacle">添加石笼</button>
-    <p>边界：左侧全宽均匀来流（固定流量 = 来流流速 × 水深 × 河宽，携带入流含沙量），右侧出口水位固定为 0 m，两岸不透水。</p>
+    <p id="boundaryNote"></p>
     <button id="solve">应用布局并重新计算</button>
     <p id="jobStatus"></p>
   </div>
@@ -115,9 +116,17 @@ const frames = D.frames;
 const $ = id => document.getElementById(id);
 
 // ---------- geometry: model metres -> canvas pixels ----------
-const W = 1200, H = 660;
-const PLOT = { left: 50, top: 60, width: 1100, height: 550 };
+// Internally the page works in local coordinates (lower-left corner = 0, 0); labels add the origin back.
+const OX = C.origin_x || 0, OY = C.origin_y || 0, FROM_RIGHT = C.inflow === 'right';
+D.points = D.points.map(([x, y]) => [x - OX, y - OY]);
+const local = g => ({ ...g, x: g.x - OX, y: g.y - OY });
+const PLOT = { left: 60, top: 60, width: 1100 };
+PLOT.height = Math.round(PLOT.width * Math.min(C.width / C.length, 1));  // equal x/y scale up to a square
+PLOT.width = Math.round(PLOT.height * C.length / C.width);
+const W = PLOT.left + PLOT.width + 40, H = PLOT.top + PLOT.height + 50;
+for (const id of ['map', 'particles']) { $(id).width = W; $(id).height = H; }
 const toPx = (x, y) => [PLOT.left + x / C.length * PLOT.width, PLOT.top + PLOT.height - y / C.width * PLOT.height];
+const tick = span => [1, 2, 5, 10, 20, 25, 50, 100, 200, 500].find(s => span / s <= 10) || span / 5;
 
 // ---------- colour scales ----------
 for (const f of frames) f.speed = f.uv.map(v => Math.hypot(v[0], v[1]));
@@ -184,6 +193,7 @@ function path(context, points) {
 }
 
 function gabionCorners(g) {
+  g = local(g);
   const a = g.angle * Math.PI / 180;
   return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => {
     const u = sx * g.length / 2, v = sy * g.width / 2;
@@ -194,11 +204,11 @@ function gabionCorners(g) {
 function drawArrows(uv) {
   ctx.strokeStyle = '#fff';
   ctx.lineWidth = 1.3;
-  const used = new Set();  // at most one arrow per 1 m × 1 m bin
+  const used = new Set(), size = Math.max(1, C.length / 40);  // at most one arrow per bin
   D.triangles.forEach((tri, i) => {
     const x = tri.reduce((s, j) => s + D.points[j][0], 0) / 3;
     const y = tri.reduce((s, j) => s + D.points[j][1], 0) / 3;
-    const bin = `${Math.floor(x)}:${Math.floor(y)}`;
+    const bin = `${Math.floor(x / size)}:${Math.floor(y / size)}`;
     if (used.has(bin)) return;
     used.add(bin);
     const [px, py] = toPx(x, y), dx = uv[i][0] * 65, dy = -uv[i][1] * 65, a = Math.atan2(dy, dx);
@@ -230,8 +240,11 @@ function draw() {
 
   ctx.fillStyle = '#b5c9cc';
   ctx.font = '16px system-ui';
-  for (let x = 0; x <= C.length; x += 2) ctx.fillText(`${x} m`, toPx(x, 0)[0] - 10, 640);
-  for (let y = 0; y <= C.width; y += 2) ctx.fillText(y, 15, toPx(0, y)[1] + 5);
+  const sx = tick(C.length), sy = tick(C.width);
+  for (let x = Math.ceil(OX / sx) * sx; x <= OX + C.length + 1e-9; x += sx)
+    ctx.fillText(`${+x.toFixed(3)} m`, toPx(x - OX, 0)[0] - 12, H - 20);
+  for (let y = Math.ceil(OY / sy) * sy; y <= OY + C.width + 1e-9; y += sy)
+    ctx.fillText(+y.toFixed(3), 8, toPx(0, y - OY)[1] + 5);
 
   $('clock').textContent = `${f.time.toFixed(1)} / ${C.duration} s`;
   $('minDepth').textContent = Math.min(...f.depth).toFixed(3) + ' m';
@@ -249,7 +262,7 @@ function setPlaying(on) {
 // ---------- tracer particles ----------
 // Triangles are found geometrically (0.5 m bins + barycentric test), not from vertex ordering.
 const pc = $('particles').getContext('2d');
-const BIN = 0.5, bins = new Map();
+const BIN = Math.max(.5, C.length / C.nx), bins = new Map();
 D.triangles.forEach((tri, i) => {
   const xs = tri.map(j => D.points[j][0]), ys = tri.map(j => D.points[j][1]);
   for (let bx = Math.floor(Math.min(...xs) / BIN); bx <= Math.floor(Math.max(...xs) / BIN); bx++)
@@ -272,11 +285,12 @@ function locate(x, y) {
   return -1;
 }
 
-const PARTICLES = 1400, MAX_AGE = 75;
+const PARTICLES = 1400, MAX_AGE = Math.max(75, 1.2 * C.length / C.velocity);  // long enough to cross the reach
 let particles = [], particlesRunning = true, lastNow = 0;
 const spawn = (anywhere = false) => ({
-  x: anywhere ? Math.random() * C.length : Math.random() * .15,  // new tracers enter at the inflow
-  y: .01 + Math.random() * (C.width - .02),
+  x: anywhere ? Math.random() * C.length  // new tracers enter at the inflow
+    : FROM_RIGHT ? C.length * (1 - .01 * Math.random()) : C.length * .01 * Math.random(),
+  y: C.width * (.001 + .998 * Math.random()),
   age: Math.random() * 30,
 });
 
@@ -390,7 +404,7 @@ function describe() {
     + (n.min_concentration < 0 ? '存在微小负值（在峰值 0.1% 容差内），按原值显示。' : '各帧单元平均含沙量非负。');
   const drags = C.gabions.map(g => (C.drag * (g.resistance - 1)).toFixed(2)).join(' / ');
   const rows = [
-    ['河段 / 初始水深 / 来流流速', `${C.length} × ${C.width} m / ${C.depth} m / ${C.velocity} m/s`],
+    ['河段 / 初始水深 / 来流流速', `${C.length} × ${C.width} m（左下角 ${OX}, ${OY}）/ ${C.depth} m / ${C.velocity} m/s`],
     ['粒径 / 密度 / 孔隙率', `${+(C.grain_size * 1000).toFixed(4)} mm / ${C.sediment_density} kg/m³ / ${C.bed_porosity}`],
     ['入流 / 初始含沙量', `${C.inlet_concentration} / ${C.initial_concentration} kg/m³（高含沙水体，场景假设）`],
     ['沉降速度 / 临界剪应力', `${k.settling_velocity.toFixed(5)} m/s / ${k.taucr.toFixed(4)} Pa（粒径闭合）`],
@@ -416,11 +430,16 @@ $('particlesPlay').onclick = () => {
   $('particlesPlay').textContent = particlesRunning ? '暂停粒子' : '继续粒子';
 };
 $('addObstacle').onclick = () => {
-  layout.push({ x: C.length / 2, y: C.width / 2, length: 3, width: 1.5, angle: 60, resistance: 10 });
+  layout.push({ x: OX + C.length / 2, y: OY + C.width / 2, length: 3, width: 1.5, angle: 60, resistance: 10 });
   showObstacles();
 };
 $('solve').onclick = solve;
 
+const [inSide, outSide] = FROM_RIGHT ? ['右侧', '左侧'] : ['左侧', '右侧'];
+$('flowArrow').textContent = FROM_RIGHT ? '← 来流（右侧）' : '来流 →';
+$('originNote').textContent = OX || OY ? `河段左下角位于 (${OX}, ${OY})` : '原点位于左下角';
+$('boundaryNote').textContent = `边界：${inSide}全宽均匀来流（固定流量 = 来流流速 × 水深 × 河宽，携带入流含沙量），`
+  + `${outSide}出口水位固定为 0 m，两岸不透水。`;
 describe();
 showObstacles();
 drawLegend();

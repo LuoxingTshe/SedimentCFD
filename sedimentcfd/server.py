@@ -15,7 +15,7 @@ from .config import Config
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'outputs' / 'preview'
-LIMITS = dict(nx=64, ny=32, duration=120.0)  # keep interactive jobs to minutes
+LIMITS = dict(cells=16000, duration=600.0)  # nx * ny and coupled seconds; keeps a job under about an hour
 
 lock = threading.Lock()
 job = {'state': 'idle'}
@@ -67,8 +67,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not 0 < size < 100_000:
                 raise ValueError('invalid request size')
             config = Config.from_dict(json.loads(self.rfile.read(size))['config'])
-            if config.nx > LIMITS['nx'] or config.ny > LIMITS['ny'] or config.duration > LIMITS['duration']:
-                raise ValueError('preview limit: {nx}×{ny} cells, {duration:g} s'.format(**LIMITS))
+            if config.nx * config.ny > LIMITS['cells'] or config.duration > LIMITS['duration']:
+                raise ValueError('preview limit: nx × ny ≤ {cells} cells, duration ≤ {duration:g} s'.format(**LIMITS))
         except (ValueError, KeyError, TypeError) as error:
             return self.reply(400, {'error': str(error)})
         with lock:

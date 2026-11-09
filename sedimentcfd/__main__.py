@@ -1,4 +1,4 @@
-"""Command line: python -m sedimentcfd {run,serve,check,config}"""
+"""Command line: python -m sedimentcfd {run,serve,check,config,dxf}"""
 import argparse
 import json
 from pathlib import Path
@@ -19,10 +19,23 @@ def main(argv=None):
     serve.add_argument('--port', type=int, default=8767)
     commands.add_parser('check', help='report whether Firedrake/Thetis are available')
     commands.add_parser('config', help='print the default config as JSON')
+    dxf = commands.add_parser('dxf', help='print a config whose gabions are the rectangles of a DXF drawing (metres)')
+    dxf.add_argument('drawing', type=Path)
+    dxf.add_argument('--inflow', choices=('left', 'right'), default='left', help='side where the water enters')
+    dxf.add_argument('--cell', type=float, default=1.0, help='target mesh cell size, m')
+    dxf.add_argument('--bank-margin', type=float, default=10.0, help='m between gabions and each bank')
+    dxf.add_argument('--upstream', type=float, default=20.0, help='m between inflow and gabions')
+    dxf.add_argument('--downstream', type=float, default=30.0, help='m between gabions and outlet')
+    dxf.add_argument('--resistance', type=float, default=10.0, help='gabion drag multiplier')
     args = parser.parse_args(argv)
 
     if args.command == 'config':
         print(json.dumps(Config().to_dict(), indent=2))
+    elif args.command == 'dxf':
+        from .dxf import config_from_dxf
+        config = config_from_dxf(args.drawing, inflow=args.inflow, cell=args.cell, bank_margin=args.bank_margin,
+                                 upstream=args.upstream, downstream=args.downstream, resistance=args.resistance)
+        print(json.dumps(config.to_dict(), indent=2))
     elif args.command == 'check':
         from .model import check
         report = check()

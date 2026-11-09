@@ -68,10 +68,21 @@ def build_preview(config: Config, output: Path):
     return data
 
 
+FRAME_FIELDS = ('uv', 'concentration', 'bed', 'depth')
+
+
+def _rounded(value, digits=4):
+    if isinstance(value, list):
+        return [_rounded(v, digits) for v in value]
+    return float(f'{value:.{digits}g}')
+
+
 def write_page(data, output: Path):
+    """Write preview_data.json and index.html; per-cell frame fields keep 4 significant digits."""
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(data, allow_nan=False)
+    frames = [{k: _rounded(v) if k in FRAME_FIELDS else v for k, v in f.items()} for f in data['frames']]
+    text = json.dumps({**data, 'frames': frames}, allow_nan=False)
     (output / 'preview_data.json').write_text(text)
     page = TEMPLATE.read_text().replace('__RESULT_JSON__', text.replace('<', '\\u003c'))
     (output / 'index.html').write_text(page)

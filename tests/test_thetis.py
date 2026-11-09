@@ -27,6 +27,17 @@ class ThetisSmokeTest(unittest.TestCase):
         self.assertGreater(data['closure']['dstar'], 1)
         self.assertGreater(data['inventory'][0]['suspended_kg'], 0)
 
+    def test_shifted_origin_and_right_inflow(self):
+        from sedimentcfd.preview import build_preview
+        config = Config(length=4, width=2, origin_x=-10, origin_y=5, inflow='right', nx=8, ny=4,
+                        spinup=5, duration=5, timestep=0.25, gabions=[Gabion(-8, 6, 1, 0.5, 30, 10)])
+        with tempfile.TemporaryDirectory() as tmp:
+            data = build_preview(config, Path(tmp))
+        xs, ys = zip(*data['points'])
+        self.assertEqual((min(xs), max(xs), min(ys), max(ys)), (-10, -6, 5, 7))
+        mean_u = sum(u for u, _ in data['frames'][-1]['uv']) / len(data['triangles'])
+        self.assertLess(mean_u, -0.5 * config.velocity)  # flowing towards -x
+
 
 if __name__ == '__main__':
     unittest.main()

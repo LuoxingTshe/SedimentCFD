@@ -31,13 +31,28 @@ python -m sedimentcfd check                       # 检查 Firedrake/Thetis 是�
 
 配置文件中可以只写需要修改的字段，其余字段取默认值。
 
+## 从 DXF 导入石笼
+
+```bash
+python -m sedimentcfd dxf Cage.dxf --inflow right > cases/cage.json
+python -m sedimentcfd run --config cases/cage.json --output outputs/cage
+```
+
+- DXF 单位按米处理。每个石笼是一个矩形：4 条首尾相连的 LINE，或一条闭合 LWPOLYLINE；不构成矩形的线（中心线、轴线标记）会被忽略。
+- 河段取石笼外包框再加边距：两岸各 `--bank-margin`（默认 10 m），来流侧 `--upstream`（20 m），出口侧 `--downstream`（30 m），向外取整到整米。用 `origin_x/origin_y` 保留 CAD 坐标。
+- `--cell`（默认 1 m）设定网格尺寸，`--resistance`（默认 10）设定阻力倍数；时间参数沿用默认值，大河段需要手动加长（见 `cases/cage.json`）。
+
+`cases/cage.json` 是 `Cage.dxf` 的算例：5 个 36 × 1.8 m 石笼，右侧来流，河段 133 × 115 m，1 m 网格，300 s 预热 + 600 s 耦合，时间步 0.5 s，单核约 31 分钟（网页约 57 MB）。
+
 ## 默认场景与参数
 
 参数集中在 `sedimentcfd/config.py` 的 `Config` 中（国际单位制）。
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `length` × `width` | 16 × 8 m | 矩形河段，左进右出 |
+| `length` × `width` | 16 × 8 m | 矩形河段 |
+| `origin_x`, `origin_y` | 0, 0 m | 河段左下角坐标（用于保留 CAD 坐标） |
+| `inflow` | `left` | 来流侧：`left`（向 +x 流）或 `right`（向 −x 流） |
 | `nx` × `ny` | 32 × 16 | 每个矩形格分成 2 个三角形，约 0.5 m |
 | `depth` | 0.6 m | 初始水深，河床平整 |
 | `velocity` | 0.35 m/s | 来流流速，固定流量 = 流速 × 水深 × 河宽 |
@@ -50,7 +65,7 @@ python -m sedimentcfd check                       # 检查 Firedrake/Thetis 是�
 | `spinup` / `duration` / `timestep` | 60 / 60 / 0.1 s | 先只算水动力预热，再进行泥沙与床面耦合计算 |
 | `gabions` | 两个 3 × 1.5 m 斜置石笼 | 中心 `x, y`，尺寸 `length, width`，角度 `angle`（度，逆时针），阻力倍数 `resistance` |
 
-网页提交的计算任务限制在 64 × 32 网格、耦合时长 120 s 以内，以免等待过久。命令行运行没有这项限制。
+网页提交的计算任务限制在 nx × ny ≤ 16000、耦合时长 ≤ 600 s。命令行运行没有这项限制。
 
 ## 模型
 
@@ -58,8 +73,8 @@ python -m sedimentcfd check                       # 检查 Firedrake/Thetis 是�
 - **石笼**：在旋转矩形范围内施加 DG0 额外线性阻力。水流可以穿过和绕过石笼，模型不解析石缝。
 - **泥沙**：守恒型悬沙方程，Thetis 求解的变量是 q = H·C / ρs。冲刷与沉积采用上游的 van Rijn 型闭合（Rouse 积分），沉降速度由粒径计算。床面用 Exner 方程更新，没有推移质，形态加速系数为 1。
 - **边界**：
-  - 左侧全宽均匀来流，流量固定，并携带入流含沙量；
-  - 右侧出口水位为 0；
+  - 来流侧（默认左侧，`inflow` 可改为右侧）全宽均匀来流，流量固定，并携带入流含沙量；
+  - 对侧出口水位为 0；
   - 两岸不透水。
 - **对上游的一处修补**：在当前 Thetis 版本中，关闭速度修正时修正因子是整数 1，CrankNicolson 会因此丢掉该项。`model.py` 通过 `sediment_model_class` 把它换成 `Constant(1)`，数值不变。
 - **导出与检查**：每次导出时把场投影到 DG0 单元平均。如果出现非正水深，或负浓度超过峰值的 0.1%，计算直接报错。

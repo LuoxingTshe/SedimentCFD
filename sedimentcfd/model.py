@@ -63,7 +63,11 @@ def run(config: Config, output: Path, on_export=None):
     c = config
     output = Path(output)
     thetis.physical_constants['rho0'].assign(WATER_DENSITY)  # Thetis defaults to sea water
-    mesh = RectangleMesh(c.nx, c.ny, c.length, c.width)
+    # Firedrake takes the upper-right corner here, not the size.
+    mesh = RectangleMesh(c.nx, c.ny, c.origin_x + c.length, c.origin_y + c.width,
+                         originX=c.origin_x, originY=c.origin_y)
+    inlet, outlet = (LEFT, RIGHT) if c.inflow == 'left' else (RIGHT, LEFT)
+    direction = 1 if c.inflow == 'left' else -1  # sign of the bulk flow along x
     bathymetry = Function(FunctionSpace(mesh, 'CG', 1), name='bathymetry_2d').assign(c.depth)
 
     # Gabions: extra linear drag drag * (resistance - 1) inside each rotated rectangle.
@@ -123,12 +127,12 @@ def run(config: Config, output: Path, on_export=None):
                 'pc_factor_mat_solver_type': 'mumps', 'mat_type': 'aij'}
             o.fields_to_export.append('sediment_2d')
         model.bnd_functions['shallow_water'] = {
-            LEFT: {'flux': inflow}, RIGHT: {'elev': Constant(0)}, **walls}
+            inlet: {'flux': inflow}, outlet: {'elev': Constant(0)}, **walls}
         return model
 
     # 1. Hydrodynamic spin-up from uniform flow.
     spinup = solver(output / 'spinup', c.spinup, sediment=False)
-    spinup.assign_initial_conditions(uv=as_vector((c.velocity, 0)), elev=Constant(0))
+    spinup.assign_initial_conditions(uv=as_vector((direction * c.velocity, 0)), elev=Constant(0))
     spinup.iterate()
 
     # 2. Coupled run with sediment-laden inflow and initial water.
@@ -136,8 +140,8 @@ def run(config: Config, output: Path, on_export=None):
     model.create_equations()
     H = model.depth.get_total_depth(model.fields.elev_2d)
     model.bnd_functions['sediment'] = {
-        LEFT: {'flux': inflow, 'value': sediment_q(c.inlet_concentration, H, c.sediment_density)},
-        RIGHT: {'elev': Constant(0)}, **walls}
+        inlet: {'flux': inflow, 'value': sediment_q(c.inlet_concentration, H, c.sediment_density)},
+        outlet: {'elev': Constant(0)}, **walls}
     H0 = bathymetry + spinup.fields.elev_2d
     model.assign_initial_conditions(
         uv=spinup.fields.uv_2d, elev=spinup.fields.elev_2d,
