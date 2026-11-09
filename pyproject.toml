@@ -9,6 +9,9 @@ description = "Qualitative 2D gabion / suspended-sediment preview on Thetis"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]  # plus Firedrake + Thetis for `run`: see scripts/install_thetis.py
 
+[project.optional-dependencies]
+video = ["Pillow>=10", "matplotlib>=3.7"]  # `video` command (matplotlib typesets the equations); also needs ffmpeg on PATH
+
 [project.scripts]
 sedimentcfd = "sedimentcfd.__main__:main"
 

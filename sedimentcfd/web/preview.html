@@ -78,7 +78,7 @@
     </div>
     <div id="legend"></div>
     <p class="muted" style="margin-bottom:0">
-      <span id="flowArrow">来流 →</span>　白色虚线框：石笼阻力区域　/　床面：橙色淤积 · 黑色零变化 · 蓝色冲刷。
+      <span id="flowArrow">来流 →</span>　白色细实线框：石笼阻力区域　/　床面：橙色淤积 · 黑色零变化 · 蓝色冲刷　/　含沙量：黑→红 #FF2C2C。
       亮点与拖尾是由计算速度场驱动的示踪粒子，不是逐颗泥沙，不计沉降；淤积由底图表示。
       流场在保存帧之间线性插值连续回放，拖动时间轴可切换时刻。
     </p>
@@ -139,12 +139,14 @@ for (const key of FIELDS) {
   ranges[key] = [lo, Math.max(hi, lo + 1e-9)];
 }
 const BLACK = [0, 0, 0], ORANGE = [255, 140, 0], BLUE = [40, 120, 255], GREEN = [170, 235, 172];
+const RED = [255, 44, 44];  // #FF2C2C, suspended-sediment concentration
 const mix = (a, b, t) => a.map((x, i) => Math.round(x + (b[i] - x) * Math.max(0, Math.min(1, t))));
 
 function color(v, key) {
   const [lo, hi] = ranges[key];
   let rgb;
   if (key === 'bed') rgb = v >= 0 ? mix(BLACK, ORANGE, v / hi) : mix(BLACK, BLUE, v / lo);  // deposition / erosion scaled separately
+  else if (key === 'concentration') rgb = mix(BLACK, RED, (v - lo) / (hi - lo));
   else rgb = mix(BLACK, GREEN, (v - lo) / (hi - lo));
   return `rgb(${rgb})`;
 }
@@ -232,10 +234,8 @@ function draw() {
   });
 
   ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([7, 5]);
+  ctx.lineWidth = 1;
   for (const g of C.gabions) { path(ctx, gabionCorners(g)); ctx.stroke(); }
-  ctx.setLineDash([]);
   if ($('arrows').checked) drawArrows(f.uv);
 
   ctx.fillStyle = '#b5c9cc';

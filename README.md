@@ -99,6 +99,19 @@ python -m sedimentcfd run --config cases/cage.json --output outputs/cage
 | `run_config.json` | 实际使用的参数和环境信息 |
 | `spinup/`, `morphology/` | Thetis 原生 VTK 输出，可用 ParaView 打开 |
 
+### 导出视频
+
+```bash
+python -m sedimentcfd video outputs/cage                     # 含沙量，2560×1440，60 fps，20 s
+python -m sedimentcfd video outputs/cage --field bed --seconds 30
+```
+
+- 只读取已有的 `preview_data.json`，不重新求解；需要 Pillow、matplotlib 和 PATH 上的 FFmpeg（macOS：`brew install ffmpeg`）。
+- 先把序列帧写到 `<run>/frames_<field>/frame_00000.png …`，再用 FFmpeg 合成 `<run>/<field>_2560x1440_60fps.mp4`（H.264、yuv420p、BT.709）。
+- 整个模拟时段均匀铺满视频时长，相邻快照之间线性插值，与网页一致；色标、石笼细实线与网页相同。
+- 右侧面板为英文，字体 Helvetica（公式用 matplotlib mathtext，缺字回退 STIX Sans），注明 Thetis 2D / Firedrake 框架与控制方程（浅水方程、Nikuradse 底摩擦、守恒型悬沙方程、Exner 方程）及当前算例参数。
+- 示踪粒子与场同步按模拟时间推进（每帧 = 模拟时长 / 帧数），不是泥沙颗粒；`--particles 0` 关闭。
+
 ## 安装
 
 ```bash
@@ -128,7 +141,8 @@ sedimentcfd/
   model.py         Thetis 运行（水动力预热 + 泥沙床面耦合）
   preview.py       逐帧导出单元平均场，生成 preview_data.json 与 index.html
   server.py        本地服务：静态文件 + 单任务求解接口
-  __main__.py      命令行：run / serve / check / config
+  video.py         离线渲染序列帧并用 FFmpeg 合成 MP4
+  __main__.py      命令行：run / serve / check / config / dxf / video
   web/preview.html 网页模板
 scripts/install_thetis.py
 tests/             参数、服务器和安装脚本测试；test_thetis.py 为真实求解冒烟测试（无 Thetis 时跳过）

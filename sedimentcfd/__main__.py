@@ -1,4 +1,4 @@
-"""Command line: python -m sedimentcfd {run,serve,check,config,dxf}"""
+"""Command line: python -m sedimentcfd {run,serve,check,config,dxf,video}"""
 import argparse
 import json
 from pathlib import Path
@@ -27,6 +27,15 @@ def main(argv=None):
     dxf.add_argument('--upstream', type=float, default=20.0, help='m between inflow and gabions')
     dxf.add_argument('--downstream', type=float, default=30.0, help='m between gabions and outlet')
     dxf.add_argument('--resistance', type=float, default=10.0, help='gabion drag multiplier')
+    video = commands.add_parser('video', help='render a finished run (preview_data.json) to PNG frames + MP4 via FFmpeg')
+    video.add_argument('run', type=Path, help='run folder holding preview_data.json, e.g. outputs/cage')
+    video.add_argument('--field', choices=('concentration', 'bed', 'speed', 'depth'), default='concentration')
+    video.add_argument('--size', default='2560x1440', help='WIDTHxHEIGHT in pixels (default 2K)')
+    video.add_argument('--fps', type=int, default=60)
+    video.add_argument('--seconds', type=float, default=20.0, help='video length; the whole run is spread over it')
+    video.add_argument('--particles', type=int, default=2400, help='tracer count, 0 for none')
+    video.add_argument('--crf', type=int, default=16, help='x264 quality (lower = better, larger)')
+    video.add_argument('--output', type=Path, help='MP4 path (default: <run>/<field>_<size>_<fps>fps.mp4)')
     args = parser.parse_args(argv)
 
     if args.command == 'config':
@@ -44,6 +53,11 @@ def main(argv=None):
     elif args.command == 'serve':
         from .server import serve
         serve(args.port)
+    elif args.command == 'video':
+        from .video import make_video
+        size = tuple(int(v) for v in args.size.lower().split('x'))
+        path = make_video(args.run, args.field, size, args.fps, args.seconds, args.particles, args.output, args.crf)
+        print('VIDEO_READY', path, flush=True)
     elif args.command == 'run':
         from .preview import build_preview
         config = Config.from_dict(json.loads(args.config.read_text())) if args.config else Config()
